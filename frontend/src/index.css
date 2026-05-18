@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;  
+body {
+  margin: 0;
+  font-family: sans-serif;
+
+  background: radial-gradient(circle at 20% 20%, #dbeafe, transparent 40%),
+              radial-gradient(circle at 80% 0%, #c7d2fe, transparent 40%),
+              linear-gradient(135deg, #eef2ff, #f8fafc);
+}
