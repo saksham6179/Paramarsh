@@ -10,6 +10,11 @@ class Message extends Model
         'conversation_id',
         'sender_id',
         'message',
+        'is_seen',
+    ];
+
+    protected $casts = [
+        'is_seen' => 'boolean',
     ];
 
     // CONVERSATION
