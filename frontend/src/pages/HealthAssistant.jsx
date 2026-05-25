@@ -148,6 +148,13 @@ export default function HealthAssistant() {
           newConversation
         );
 
+        localStorage.setItem(
+          `activeAIConversation_${user.id}`,
+          JSON.stringify(
+            newConversation
+          )
+        );
+
         setMessages([
           {
             sender:
@@ -182,7 +189,7 @@ export default function HealthAssistant() {
       );
 
       localStorage.setItem(
-        "activeAIConversation",
+        `activeAIConversation_${user.id}`,
         JSON.stringify(conversation)
       );
 
@@ -231,6 +238,10 @@ export default function HealthAssistant() {
           );
 
           setMessages([]);
+
+          localStorage.removeItem(
+            `activeAIConversation_${user.id}`
+          );
 
         }
 
@@ -375,27 +386,41 @@ export default function HealthAssistant() {
   // =========================
   useEffect(() => {
 
+    if (!user) return;
+
     fetchConversations();
 
     const savedConversation =
       localStorage.getItem(
-        "activeAIConversation"
+        `activeAIConversation_${user.id}`
       );
 
     if (savedConversation) {
 
-      const parsed =
-        JSON.parse(
-          savedConversation
+      try {
+
+        const parsed =
+          JSON.parse(
+            savedConversation
+          );
+
+        setActiveConversation(
+          parsed
         );
 
-      setActiveConversation(
-        parsed
-      );
+        fetchMessages(
+          parsed.id
+        );
 
-      fetchMessages(
-        parsed.id
-      );
+      } catch (error) {
+
+        console.log(error);
+
+        localStorage.removeItem(
+          `activeAIConversation_${user.id}`
+        );
+
+      }
 
     }
 

@@ -15,7 +15,7 @@ class AIController extends Controller
     // =========================
     public function getConversations($userId)
     {
-        $conversations = Conversation::where('user_id', $userId)
+        $conversations = AIConversation::where('user_id', $userId)
             ->latest()
             ->with(['messages' => function ($query) {
                 $query->latest()->limit(1);
@@ -30,10 +30,12 @@ class AIController extends Controller
     // =========================
     public function getMessages($conversationId)
     {
-        $messages = Message::where(
+        $messages = AIMessage::where(
             'conversation_id',
             $conversationId
-        )->get();
+        )
+        ->orderBy('created_at', 'asc')
+        ->get();
 
         return response()->json($messages);
     }
@@ -47,11 +49,10 @@ class AIController extends Controller
             'user_id' => 'required',
         ]);
 
-        $conversation =
-            AIConversation::create([
-                'user_id' => $request->user_id,
-                'title' => 'New Health Chat',
-            ]);
+        $conversation = AIConversation::create([
+            'user_id' => $request->user_id,
+            'title' => 'New Health Chat',
+        ]);
 
         return response()->json($conversation);
     }
@@ -61,22 +62,23 @@ class AIController extends Controller
     // =========================
     public function deleteConversation($id)
     {
-        $conversation =
-            AIConversation::find($id);
+        $conversation = AIConversation::find($id);
 
         if (!$conversation) {
-
             return response()->json([
-                'message' =>
-                    'Conversation not found'
+                'message' => 'Conversation not found'
             ], 404);
         }
+
+        AIMessage::where(
+            'conversation_id',
+            $id
+        )->delete();
 
         $conversation->delete();
 
         return response()->json([
-            'message' =>
-                'Conversation deleted'
+            'message' => 'Conversation deleted'
         ]);
     }
 
@@ -89,24 +91,19 @@ class AIController extends Controller
     ) {
 
         $request->validate([
-            'title' =>
-                'required|string|max:100',
+            'title' => 'required|string|max:100',
         ]);
 
-        $conversation =
-            AIConversation::find($id);
+        $conversation = AIConversation::find($id);
 
         if (!$conversation) {
-
             return response()->json([
-                'message' =>
-                    'Conversation not found'
+                'message' => 'Conversation not found'
             ], 404);
         }
 
         $conversation->update([
-            'title' =>
-                trim($request->title),
+            'title' => trim($request->title),
         ]);
 
         return response()->json($conversation);
@@ -118,43 +115,30 @@ class AIController extends Controller
     public function sendMessage(Request $request)
     {
         $request->validate([
-            'conversation_id' =>
-                'required',
-
-            'message' =>
-                'required|string',
+            'conversation_id' => 'required',
+            'message' => 'required|string',
         ]);
 
         // SAVE USER MESSAGE
         AIMessage::create([
-
-            'conversation_id' =>
-                $request->conversation_id,
-
-            'sender' =>
-                'user',
-
-            'message' =>
-                trim($request->message),
+            'conversation_id' => $request->conversation_id,
+            'sender' => 'user',
+            'message' => trim($request->message),
         ]);
 
-        // GET PREVIOUS CHAT
-        $previousMessages =
-            AIMessage::where(
-                'conversation_id',
-                $request->conversation_id
-            )
-            ->orderBy(
-                'created_at',
-                'asc'
-            )
-            ->take(15)
-            ->get();
+        // GET PREVIOUS MESSAGES
+        $previousMessages = AIMessage::where(
+            'conversation_id',
+            $request->conversation_id
+        )
+        ->orderBy('created_at', 'asc')
+        ->take(20)
+        ->get();
 
-        // BUILD MESSAGE ARRAY
+        // BUILD CHAT HISTORY
         $messages = [];
 
-        // SYSTEM PROMPT
+        // SYSTEM MESSAGE
         $messages[] = [
             "role" => "system",
             "content" =>
@@ -162,37 +146,35 @@ class AIController extends Controller
 
 Rules:
 - Speak naturally like ChatGPT.
-- Give helpful health guidance.
-- Be concise but supportive.
-- Never claim to be a real doctor.
-- Recommend professional help for serious conditions.
-- Use easy English."
+- Give useful healthcare guidance.
+- Keep responses supportive and concise.
+- Never claim to be a doctor.
+- Recommend professional medical help for serious issues.
+- Use simple English."
         ];
 
         // ADD HISTORY
         foreach ($previousMessages as $msg) {
 
             $messages[] = [
-
                 "role" =>
                     $msg->sender === 'user'
-                    ? 'user'
-                    : 'assistant',
+                        ? 'user'
+                        : 'assistant',
 
-                "content" =>
-                    $msg->message
+                "content" => $msg->message
             ];
         }
 
-        // =========================
-        // OPENROUTER API CALL
-        // =========================
-        $response =
-            Http::withHeaders([
+        try {
+
+            // =========================
+            // OPENROUTER API
+            // =========================
+            $response = Http::withHeaders([
 
                 'Authorization' =>
-                    'Bearer ' .
-                    env('OPENROUTER_API_KEY'),
+                    'Bearer ' . env('OPENROUTER_API_KEY'),
 
                 'HTTP-Referer' =>
                     'http://localhost',
@@ -200,7 +182,7 @@ Rules:
                 'X-Title' =>
                     'Paramarsh AI',
 
-            ])->post(
+            ])->timeout(60)->post(
                 'https://openrouter.ai/api/v1/chat/completions',
                 [
 
@@ -218,83 +200,65 @@ Rules:
                 ]
             );
 
-        // =========================
-        // API FAILED
-        // =========================
-        if (!$response->successful()) {
+            // FAILED RESPONSE
+            if (!$response->successful()) {
 
-            $assistantMessage =
-                AIMessage::create([
+                return response()->json([
+                    'error' => 'AI request failed',
+                    'details' => $response->body()
+                ], 500);
+            }
 
-                    'conversation_id' =>
-                        $request->conversation_id,
+            $data = $response->json();
 
-                    'sender' =>
-                        'assistant',
+            $botReply =
+                $data['choices'][0]['message']['content']
+                ?? "Sorry, AI could not respond right now.";
 
-                    'message' =>
-                        "OpenRouter Error:\n\n" .
-                        $response->body(),
-                ]);
+        } catch (\Exception $e) {
 
-            return response()->json([
-                'reply' =>
-                    $assistantMessage
-            ]);
+            $botReply =
+                "Sorry, AI could not respond right now.";
         }
-
-        // RESPONSE DATA
-        $data =
-            $response->json();
-
-        $botReply =
-            $data['choices'][0]['message']['content']
-            ?? "Sorry, AI could not respond right now.";
 
         // DISCLAIMER
         $botReply .=
             "\n\n⚠️ Medical Disclaimer: This AI assistant provides general guidance only and is not a substitute for professional medical advice.";
 
-        // SAVE AI MESSAGE
-        $assistantMessage =
-            AIMessage::create([
+        // SAVE BOT MESSAGE
+        $assistantMessage = AIMessage::create([
 
-                'conversation_id' =>
-                    $request->conversation_id,
+            'conversation_id' =>
+                $request->conversation_id,
 
-                'sender' =>
-                    'assistant',
+            'sender' =>
+                'assistant',
 
-                'message' =>
-                    $botReply,
-            ]);
+            'message' =>
+                $botReply,
+        ]);
 
         // UPDATE TITLE
-        $conversation =
-            AIConversation::find(
-                $request->conversation_id
-            );
+        $conversation = AIConversation::find(
+            $request->conversation_id
+        );
 
         if (
             $conversation &&
-            $conversation->title ===
-            'New Health Chat'
+            $conversation->title === 'New Health Chat'
         ) {
 
             $conversation->update([
-
-                'title' =>
-                    substr(
-                        trim($request->message),
-                        0,
-                        30
-                    ),
+                'title' => substr(
+                    trim($request->message),
+                    0,
+                    30
+                ),
             ]);
         }
 
         return response()->json([
-            'reply' =>
-                $assistantMessage
+            'reply' => $assistantMessage
         ]);
     }
 }
